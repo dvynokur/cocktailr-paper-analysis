@@ -47,3 +47,31 @@ po/*~
 
 # RStudio Connect folder
 rsconnect/
+
+# ---- Project-specific
+
+# Raw/private data
+data/raw/
+data/private/
+
+# Processed data generated locally
+data/processed/
+
+# Large local data objects
+*.rds
+*.RDS
+*.RData
+
+# Raw tabular data inside data/
+data/**/*.csv
+data/**/*.tsv
+data/**/*.xlsx
+data/**/*.xls
+
+# Keep documentation files in data folders
+!data/raw/README.md
+!data/processed/README.md
+
+# Temporary/private outputs
+outputs/temp/
+outputs/private/

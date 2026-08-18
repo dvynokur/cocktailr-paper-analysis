@@ -1,0 +1,854 @@
+---
+output:
+  pdf_document:
+    toc: false
+    number_sections: false
+    latex_engine: xelatex
+fontsize: 11pt
+geometry: margin=2.5cm
+mainfont: "Times New Roman"
+sansfont: "Arial"
+monofont: "Courier New"
+bibliography: references.bib
+csl: journal-of-vegetation-science.csl
+link-citations: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  collapse   = TRUE,
+  comment    = "#>",
+  fig.width  = 7,
+  fig.height = 5,
+  dpi        = 300,
+  out.width  = "100%",
+  echo       = TRUE,
+  message    = FALSE,
+  warning    = FALSE,
+  cache      = FALSE,
+  eval       = TRUE
+)
+
+options(width = 60)
+
+library(cocktailr)
+```
+
+\noindent Supporting Information to the paper [Authors] Cocktail clustering for diagnostic species-based vegetation classification in large databases. \textit{Journal of Vegetation Science}.
+
+\bigskip
+\bigskip
+
+\begin{center}
+{\Large \textbf{Appendix S1. User guide to the \textit{cocktailr} R package}}
+\end{center}
+
+\bigskip
+
+\tableofcontents
+
+\pagebreak
+
+This appendix describes the main workflow and functions of the **`cocktailr`** package, which implements a fast and reproducible version of the Cocktail algorithm for clustering vegetation-plot data.
+
+The typical workflow is:
+
+1. Prepare vegetation data either as a **plots × species** matrix or as a long-format table with plot, species and value columns.
+2. Run **`cocktail_cluster()`** to build the Cocktail tree (and optionally compute **species–cluster \(\phi\) profiles**).
+3. Use **`cocktail_plot()`** to visualize the dendrogram.
+4. Extract candidate diagnostic species groups (either **parent clusters at a \(\phi\) cut** with **`clusters_at_cut()`** or **strong clusters by score** with **`select_clusters()`**).
+5. Inspect species sets with **`species_in_clusters()`** (optionally ranked/filtered by \(\phi\)).
+6. List plots belonging to clusters or combinations of clusters with **`releves_in_clusters()`** and locate clusters containing target species with **`clusters_with_species()`**.
+7. Quantify distances between clusters by **direct plot co-membership \(\phi\)** with **`cluster_phi_dist()`**.
+8. Assign plots (relevés) to candidate vegetation units with **`assign_releves()`**.
+
+Below we describe each function in detail with reproducible examples.
+
+---
+
+\pagebreak
+
+## Installation
+
+The development version of `cocktailr` can be installed from GitHub using:
+
+```{r, eval=FALSE}
+install.packages("remotes")
+remotes::install_github("dvynokur/cocktailr")
+```
+
+The version of `cocktailr` used in the manuscript was archived as GitHub release v0.1.0 and can be installed using:
+
+```{r, eval=FALSE}
+remotes::install_github("dvynokur/cocktailr@v0.1.0")
+```
+
+After installation, load the package with:
+
+```{r, eval=FALSE}
+library(cocktailr)
+```
+
+## 1. Data requirements
+
+`cocktailr` accepts vegetation data either as a **plots × species** table (**wide format**) or as a **long-format** table with plot, species and value columns.
+
+In the **wide format**, rows are plots (relevés), columns are species, and cell values are typically **cover/abundance**. In the **long format**, each row represents one plot–species record together with its associated value.
+
+Cocktail clustering itself is based on **presence/absence** only: internally, values > 0 are treated as presence (1), and values ≤ 0 or `NA` as absence (0). Cover values therefore do **not** influence the merge topology.
+
+Cover values can still be used downstream if requested:
+
+- If `plot_values = "rel_cover"` in `cocktail_cluster()`, the function stores **relative cover** for each plot and cluster in `Plot.cluster`, defined as  
+  (sum of the cluster species covers in the plot) / (total cover in the plot),  
+  with values set to 0 for plots that do not meet the cluster membership threshold (*m*) and for plots with total cover = 0.
+
+Basic checks on the cover scale are performed inside `cocktail_cluster()`:
+
+- if values appear **binary (0/1)** or contain **non-numeric codes** (e.g. `+`, `r`, `2a`), the function warns and falls back to binary plot-membership output (`plot_values = "binary"`).
+- if values look **ordinal** (small integer scales), the function warns but proceeds; percentage cover is recommended.
+
+Minimum requirements:
+
+**Wide format**
+
+- plots in rows, species in columns
+- `colnames(vegmatrix)` = species names (required)
+- `rownames(vegmatrix)` = plot names (strongly recommended)
+- species columns with no presences (all zeros after binarization) are dropped internally before clustering
+
+**Long format**
+
+- one column with plot IDs
+- one column with species names or species IDs
+- one column with numeric abundance/cover values
+- duplicate plot–species records are aggregated internally
+- empty plots are removed internally
+
+Example toy matrix (wide format):
+
+```{r}
+vm <- matrix(c(1,  0,  5,
+               0, 10,  0,
+               2,  5,  0,
+               0,  1,  3),
+             nrow = 4, byrow = TRUE,
+             dimnames = list(
+               paste0("plot", 1:4),
+               c("sp1", "sp2", "sp3")
+             ))
+
+vm
+```
+
+Example toy matrix (long format):
+
+```{r}
+vm_long <- data.frame(
+  plot    = c("plot1","plot1","plot2","plot3","plot3","plot4","plot4"),
+  species = c("sp1","sp3","sp2","sp1","sp2","sp2","sp3"),
+  value   = c(1,5,10,2,5,1,3)
+)
+
+vm_long
+```
+
+---
+
+## 2. Building the Cocktail tree: `cocktail_cluster()`
+
+### 2.1. Purpose
+
+`cocktail_cluster()` performs **Cocktail agglomeration** on vegetation data supplied either as a **plots × species** table (wide format) or as a **long-format** table with plot, species and value columns.
+
+For two binary presence vectors representing two species, \(\phi\) is computed from the 2×2 contingency table counts:
+
+- \(a\): number of plots where both species occur
+- \(b\): plots where species 1 occurs and species 2 does not
+- \(c\): plots where species 2 occurs and species 1 does not
+- \(d\): plots where neither species occurs
+
+\[
+  \phi \;=\; \frac{ad - bc}{\sqrt{(a+c)(b+d)(a+b)(c+d)}}.
+\]
+
+Internally, the function:
+
+- **Binarizes** input for clustering: values \(> 0\) are set to 1; values \(\leq 0\) or `NA` are set to 0.
+- Drops **empty species columns** (all zeros) before clustering.
+- For **long-format** input, aggregates duplicate plot–species records and removes empty plots.
+- Computes \(\phi\) each round from a sparse crossproduct for speed and exactness.
+- Uses a **deterministic tie order**: ties in maximum \(\phi\) are resolved in the fixed order corresponding to the lower-triangular scan order used by R’s distance objects.
+- Stores `Plot.cluster` as a **sparse `dgCMatrix`**, containing either binary membership (`plot_values = "binary"`) or relative cover (`plot_values = "rel_cover"`).
+- Optionally computes **species–cluster \(\phi\) profiles** (`Species.cluster.phi`), a species × clusters matrix of \(\phi\) between species presence and cluster membership.
+
+### 2.2. Key arguments
+
+```{r, eval=FALSE}
+cocktail_cluster(
+  vegmatrix,
+  progress            = TRUE,
+  plot_values         = c("binary", "rel_cover"),
+  species_cluster_phi = TRUE,
+  input_format        = c("wide", "long"),
+  long                = list(plot = "plot",
+                             species = "species",
+                             value = "value"),
+  save_vegmatrix      = TRUE
+)
+```
+
+- **`vegmatrix`**: vegetation data supplied either as a plots × species matrix or data.frame (`input_format = "wide"`) or as a long-format data frame with plot, species and value columns (`input_format = "long"`).
+- **`plot_values`**:
+  - `"binary"` (default): `Plot.cluster` stores 0/1 plot membership per cluster.
+  - `"rel_cover"`: `Plot.cluster` stores relative cover per plot and cluster (set to 0 outside cluster membership).
+- **`species_cluster_phi`**:
+  - `TRUE` (default): compute `Species.cluster.phi` (species × clusters \(\phi\) profiles).
+  - `FALSE`: do not compute \(\phi\) profiles.
+- **`input_format`**:
+  - `"wide"` (default): interpret `vegmatrix` as a plots × species table.
+  - `"long"`: interpret `vegmatrix` as a long-format table.
+- **`long`**: named list specifying the column names used for long-format input, with elements `plot`, `species`, and `value`.
+- **`save_vegmatrix`**:
+  - `TRUE` (default): store the internally used, cleaned and aligned vegetation matrix (`vegmatrix`) as a sparse `dgCMatrix` (plots × species), which can be reused in downstream functions (e.g. `assign_releves()`).
+  - `FALSE`: do not store it, reducing memory usage.
+
+### 2.3. Returned components
+
+The result `res` is a list of class `"cocktail"` with at least:
+
+- `Cluster.species`: clusters × species matrix (0/1 membership of species in each cluster).
+- `Cluster.info`: clusters × 2 integer matrix with columns `k` (number of species constituting the cluster) and `m` (cluster membership threshold).
+- `Cluster.merged`: clusters × 2 integer matrix describing the merge topology; each row corresponds to one cluster, and the two columns store its two children (negative values indicate original species, positive values indicate previously formed clusters).
+- `Cluster.height`: \(\phi\) at each merge (cluster height).
+- `Plot.cluster`: plots × clusters sparse matrix (binary membership or relative cover).
+- `Species.cluster.phi` (optional): species × clusters \(\phi\) profiles.
+- `vegmatrix` (optional): cleaned and aligned vegetation matrix stored in the result if `save_vegmatrix = TRUE` as a sparse `dgCMatrix` (plots × species).
+- `species`, `plots`: names aligned to the cleaned dataset.
+
+### 2.4. Example: basic clustering (wide format) with relative cover output
+
+```{r}
+set.seed(1)
+vm <- matrix(sample(c(0,0,0,1,2,5,10), 80, replace = TRUE),
+             nrow = 10,
+             dimnames = list(
+               paste0("plot", 1:10),
+               paste0("sp",   1:8)
+             ))
+
+res <- cocktail_cluster(
+  vegmatrix           = vm,
+  plot_values         = "rel_cover",
+  species_cluster_phi = TRUE,
+  save_vegmatrix      = TRUE
+)
+
+names(res)
+```
+
+### 2.5. Example: long-format input with relative cover output
+
+```{r}
+res_long <- cocktail_cluster(
+  vegmatrix           = vm_long,
+  plot_values         = "rel_cover",
+  species_cluster_phi = TRUE,
+  input_format        = "long",
+  long                = list(plot = "plot",
+                             species = "species",
+                             value = "value")
+)
+
+class(res_long$Plot.cluster)
+res_long$Plot.cluster[1:min(5, nrow(res_long$Plot.cluster)),
+                      1:min(5, ncol(res_long$Plot.cluster)),
+                      drop = FALSE]
+res_long$vegmatrix
+```
+
+---
+
+## 3. Visualizing the dendrogram: `cocktail_plot()`
+
+### 3.1. Purpose
+
+`cocktail_plot()` draws a dendrogram-style representation of the Cocktail tree, with merge heights equal to \(\phi\).
+
+- Species are shown as tips.
+- Clusters are shown as successive merges.
+- The y-axis shows the merge \(\phi\).
+- Optional background bands can indicate clusters retained at a chosen \(\phi\) cut.
+- Optional highlighting of user-specified clusters or combinations of clusters.
+- Output can be written to PDF/PNG or displayed on the active graphics device.
+
+### 3.2. Interface
+
+```{r, eval=FALSE}
+cocktail_plot(
+  x,
+  file           = NULL,
+  phi_cut        = NULL,
+  clusters       = NULL,
+  label_clusters = FALSE,
+  cex_species    = 0.3,
+  cex_clusters   = 0.6,
+  circle_inch    = 0.1,
+  page_size      = 300,
+  width_in       = NULL,
+  height_in      = 10,
+  alpha_fill     = 0.18,
+  alpha_border   = 0.65,
+  palette        = "rainbow",
+  png_res        = 300
+)
+```
+
+### 3.3. Examples
+
+Plot to the current device with a background band at a chosen \(\phi\) cut:
+
+```{r}
+cocktail_plot(
+  x              = res,
+  file           = NULL,
+  phi_cut        = 0.30,
+  label_clusters = TRUE,
+  cex_species    = 0.9
+)
+```
+
+Highlight selected clusters (vector) or combinations of clusters (list):
+
+```{r, eval=FALSE}
+# selected clusters as a vector
+cocktail_plot(x = res,
+              clusters = c("c_2","c_5"),
+              label_clusters = TRUE
+)
+
+# combinations of clusters specified as a list
+cocktail_plot(
+  x = res,
+  clusters = list(group1 = c("c_2","c_5"), group2 = "c_7"),
+  label_clusters = TRUE
+)
+```
+
+---
+
+## 4. Selecting parent clusters at a \(\phi\) cut: `clusters_at_cut()`
+
+### 4.1. Purpose
+
+`clusters_at_cut()` identifies the parent clusters at or above a chosen \(\phi\) threshold. These are the topmost clusters that meet the cut level, i.e. none is nested within another above-cut cluster.
+
+### 4.2. Usage
+
+```{r, eval=FALSE}
+clusters_at_cut(x, phi_cut, as_labels = TRUE)
+```
+
+- **`phi_cut`**: numeric \(\phi\) cut (0–1).
+- **`as_labels`**: return `"c_<id>"` labels (`TRUE`) or integer IDs (`FALSE`).
+
+### 4.3. Example
+
+```{r}
+parent_labels <- clusters_at_cut(res, 
+                                 phi_cut = 0.30, 
+                                 as_labels = TRUE
+)
+parent_labels
+```
+
+---
+
+## 5. Selecting strong clusters by score: `select_clusters()`
+
+### 5.1. Purpose
+
+`select_clusters()` ranks clusters using a combined score based on merge \(\phi\), cluster size \(k\), and membership threshold \(m\):
+
+\[
+\mathrm{score} = h \cdot \log(k) \cdot \log(m),
+\]
+
+where \(h\) is the merge height (\(\phi\)), \(k\) is the number of species in the cluster, and \(m\) is the cluster membership threshold.
+
+Selection is greedy in decreasing score order (ties are broken by larger \(k\), then smaller cluster ID). The `mode` argument controls nesting:
+
+- `mode = "strict"`: returns a non-nested set (a candidate is skipped if it is a strict ancestor or descendant of any already selected cluster).
+- `mode = "top"`: among eligible candidates, keeps only the hierarchically highest clusters (drops descendants if an eligible ancestor exists).
+
+### 5.2. Usage
+
+```{r, eval=FALSE}
+select_clusters(
+  x,
+  clusters   = NULL,
+  min_phi    = 0.2,
+  min_k      = 1L,
+  min_score  = 1,
+  mode       = c("strict","top"),
+  return     = c("labels","ids","table")
+)
+```
+
+### 5.3. Example
+
+```{r}
+strong_labels <- select_clusters(
+  x         = res,
+  min_phi   = 0.20,
+  min_k     = 1L,
+  min_score = 0,
+  mode      = "strict",
+  return    = "labels"
+)
+
+strong_labels
+```
+
+Score table:
+
+```{r}
+strong_table <- select_clusters(
+  x         = res,
+  min_phi   = 0.20,
+  min_k     = 1L,
+  min_score = 0,
+  mode      = "strict",
+  return    = "table"
+)
+
+strong_table
+```
+
+---
+
+## 6. Species sets and diagnostic lists: `species_in_clusters()`
+
+### 6.1. Purpose
+
+`species_in_clusters()` returns species sets for selected Cocktail clusters or for combinations of clusters.
+
+- By default, it returns the **cluster-constituting species set** (from `Cluster.species`).
+- If `species_cluster_phi = TRUE`, it uses `Species.cluster.phi` to report \(\phi\) values per species and cluster, allowing ranked and \(\phi\)-filtered diagnostic lists.
+
+### 6.2. Usage
+
+```{r, eval=FALSE}
+species_in_clusters(
+  x,
+  labels,
+  species_cluster_phi = FALSE,
+  min_phi             = NULL,
+  top_k               = NULL,
+  sort_desc           = TRUE
+)
+```
+
+### 6.3. Examples
+
+Cluster-constituting species sets:
+
+```{r}
+sp_sets <- species_in_clusters(
+  x      = res,
+  labels = c("c_2", "c_5")
+)
+str(sp_sets)
+```
+
+Combinations of clusters:
+
+```{r}
+union_sets <- species_in_clusters(
+  x      = res,
+  labels = list(
+    group1 = c("c_1", "c_2"),
+    group2 = "c_4"
+  )
+)
+union_sets
+```
+
+Diagnostic lists with \(\phi\) (requires `species_cluster_phi = TRUE` in `cocktail_cluster()`):
+
+```{r}
+sp_phi <- species_in_clusters(
+  x                   = res,
+  labels              = c("c_2", "c_5"),
+  species_cluster_phi = TRUE,
+  min_phi             = 0.25,
+  top_k               = 10
+)
+sp_phi$c_5
+```
+
+---
+
+## 7. Listing plots in clusters or combinations of clusters: `releves_in_clusters()`
+
+### 7.1. Purpose
+
+`releves_in_clusters()` returns the plot IDs (relevés) belonging to selected clusters based on `Plot.cluster > 0`. It supports both single clusters and combinations of clusters (OR across clusters).
+
+If `values = TRUE`, it returns membership values instead of plot IDs:
+
+- for a single cluster, the corresponding `Plot.cluster` values are returned;
+- for a combination of clusters, the per-plot **maximum** `Plot.cluster` **value** across the selected clusters is returned (binary membership if `plot_values = "binary"`; maximum relative cover if `plot_values = "rel_cover"`).
+
+If `drop0 = TRUE` (default), only plots belonging to the selected cluster(s) are returned. If `drop0 = FALSE`, non-member plots are also retained with membership value 0. This option is mainly useful when returning membership values rather than only plot IDs.
+
+### 7.2. Usage
+
+```{r, eval=FALSE}
+releves_in_clusters(
+  x,
+  clusters,
+  values = FALSE,
+  drop0  = TRUE,
+  return = c("list", "vector", "matrix")
+)
+```
+
+### 7.3. Examples
+
+Single cluster:
+
+```{r}
+releves_in_clusters(res, clusters = "c_2")
+```
+
+Combination of clusters:
+
+```{r}
+releves_in_clusters(
+  res,
+  clusters = list(group1 = c("c_2", "c_5"))
+)
+```
+
+Membership values as a matrix:
+
+```{r}
+releves_in_clusters(
+  res,
+  clusters = list(group1 = c("c_2", "c_5")),
+  values   = TRUE,
+  drop0    = FALSE,
+  return   = "matrix"
+)
+```
+
+---
+
+## 8. Finding clusters containing species: `clusters_with_species()`
+
+### 8.1. Purpose
+
+`clusters_with_species()` returns clusters whose cluster-constituting species set (from `Cluster.species`) contains one or more queried species. This is a fast, topological lookup (not a \(\phi\)-based fidelity measure).
+
+By default, it filters to clusters with `Cluster.height >= 0` via `min_phi = 0`.
+
+### 8.2. Usage
+
+```{r, eval=FALSE}
+clusters_with_species(
+  x,
+  species,
+  match   = c("any", "all"),
+  min_phi = 0,
+  return  = c("labels", "ids", "table")
+)
+```
+
+### 8.3. Examples
+
+Clusters containing a species:
+
+```{r}
+clusters_with_species(res, species = "sp1")
+```
+
+Clusters containing *both* species, restricted to stronger clusters:
+
+```{r}
+clusters_with_species(
+  res,
+  species = c("sp5", "sp8"),
+  match   = "all",
+  min_phi = 0.2
+)
+```
+
+---
+
+## 9. Distances between clusters: `cluster_phi_dist()`
+
+### 9.1. Purpose
+
+`cluster_phi_dist()` computes pairwise distances between clusters based on plot co-membership, using the **\(\phi\) coefficient between their binary plot-membership vectors** (co-membership across plots).
+
+Membership is derived as:  
+`membership = (Plot.cluster > 0)`.
+
+Distance is defined as:
+
+\[
+d(A,B) = 1 - \phi(A,B),
+\]
+
+so distances lie in \([0,2]\).
+
+This function does **not** use `Species.cluster.phi`.
+
+### 9.2. Usage
+
+```{r, eval=FALSE}
+cluster_phi_dist(
+  x,
+  clusters = NULL
+)
+```
+
+### 9.3. Example
+
+Select clusters with sufficiently high merge height (\(\phi\)):
+
+```{r}
+clusters_for_dist <- which(res$Cluster.height >= 0.25)
+clusters_for_dist
+
+D <- cluster_phi_dist(
+  x        = res,
+  clusters = clusters_for_dist
+)
+
+D
+```
+
+Cluster the selected clusters:
+
+```{r}
+hc_clusters <- hclust(D, method = "average")
+plot(hc_clusters, 
+     main = "Cluster dendrogram (1 - co-membership phi)", 
+     cex = 0.8
+)
+```
+
+---
+
+## 10. Assigning plots (relevés) to candidate vegetation units: `assign_releves()`
+
+### 10.1. Purpose
+
+`assign_releves()` assigns each plot to one of a user-defined set of **candidate vegetation units** represented by one or several Cocktail clusters.
+
+Candidate vegetation units are defined by `clusters`:
+
+- If `clusters` is a **vector** (e.g. `c("c_12", "c_27")` or `c(12, 27)`), each element defines one candidate vegetation unit represented by a single cluster.
+- If `clusters` is a **list**, each list element defines one candidate vegetation unit represented by several clusters (OR across cluster memberships).
+
+Each plot is assigned by scoring all candidate vegetation units and selecting the best-scoring unit. Depending on `plot_membership`, scoring can be restricted to vegetation units for which the plot is already a Cocktail member (based on `Plot.cluster > 0`, combined across the clusters representing that unit), or allowed for all candidate vegetation units.
+
+### 10.2. Interface
+
+```{r, eval=FALSE}
+assign_releves(
+  x,
+  strategy        = c("count", "cover", "phi", "phi_cover"),
+  clusters,
+  plot_membership = TRUE,
+  min_phi         = NULL,
+  min_group_size  = 1L
+)
+```
+
+### 10.3. Strategies
+
+For each candidate vegetation unit \(u\), `assign_releves()` defines a set of candidate species \(S_u\) used for scoring.
+
+**`"count"`**
+
+- Score: number of species in \(S_u\) present in the plot.
+- Candidate species: \(S_u\) is the cluster-constituting species set from `Cluster.species` (unioned if the vegetation unit is represented by several clusters).
+- Ties set to `"+"`. All zero set to `NA`.
+
+**`"cover"`**
+
+- Score: sum of cover values \(\mathrm{cover}(p,i)\) (from `vegmatrix`) of species in \(S_u\) present in the plot.
+- Candidate species: \(S_u\) is the cluster-constituting species set from `Cluster.species` (unioned if the vegetation unit is represented by several clusters).
+- Tie-breaker: species count; remaining ties set to `"+"`. All zero set to `NA`.
+
+**`"phi"`** (requires `Species.cluster.phi`)
+
+- Define vegetation-unit-level \(\phi(i,u)\) as the maximum \(\phi\) across the clusters representing that unit; negative values are truncated to 0.
+- Score: sum of \(\phi(i,u)\) over species in \(S_u\) present in the plot.
+- Tie-breakers: (1) total cover, (2) species count; remaining ties set to `"+"`. All zero set to `NA`.
+- Candidate species depend on `min_phi`:
+  - `min_phi = NULL` (default): \(S_u\) contains only the cluster-constituting species.
+  - numeric `min_phi` in \([0,1]\): \(S_u\) contains species with \(\phi(i,u) \ge \mathrm{min\_phi}\) (from the full \(\phi\) profile).
+
+**`"phi_cover"`** (requires `Species.cluster.phi`)
+
+- Score: \(\sum \mathrm{cover}(p,i) \times \phi(i,u)\) over species in \(S_u\) present in the plot.
+- Tie-breakers: (1) total cover, (2) species count; remaining ties set to `"+"`. All zero set to `NA`.
+- Candidate species depend on `min_phi`:
+  - `min_phi = NULL` (default): \(S_u\) contains only the cluster-constituting species.
+  - numeric `min_phi` in \([0,1]\): \(S_u\) contains species with \(\phi(i,u) \ge \mathrm{min\_phi}\) (from the full \(\phi\) profile).
+
+If `"phi"` or `"phi_cover"` is requested but `Species.cluster.phi` is missing, the function warns and falls back to `"count"` (if `plot_membership = TRUE`) or `"cover"` (if `plot_membership = FALSE`).
+
+### 10.4. Example
+
+```{r}
+# define candidate vegetation units from clusters at a phi cut
+candidate_units <- clusters_at_cut(res, phi_cut = 0.3, as_labels = TRUE)
+
+rel_count <- assign_releves(
+  x               = res,
+  strategy        = "count",
+  clusters        = candidate_units,
+  plot_membership = TRUE,
+  min_group_size  = 1L
+)
+
+table(rel_count, useNA = "ifany")
+```
+
+\(\phi\)-weighted assignment (requires `Species.cluster.phi`). When `plot_membership = FALSE`, all candidate vegetation units compete for every plot, regardless of whether the plot meets the Cocktail membership criterion (m-threshold) for any cluster representing that unit (i.e., regardless of `res$Plot.cluster > 0`):
+
+```{r}
+rel_phi <- assign_releves(
+  x               = res,
+  strategy        = "phi_cover",
+  clusters        = candidate_units,
+  plot_membership = FALSE,
+  min_phi         = 0.25,
+  min_group_size  = 1L
+)
+
+table(rel_phi)
+```
+
+---
+
+## 11. Typical analysis workflow (dune dataset)
+
+This section illustrates a typical workflow using the **dune** dataset included in the `vegan` package. The dataset comprises 20 vegetation plots and cover values for 30 plant species.
+
+### 11.1. Step 1: Prepare vegetation matrix
+
+```{r}
+library(vegan)
+data(dune)
+
+vm <- as.matrix(dune)
+dim(vm)
+```
+
+### 11.2. Step 2: Run Cocktail clustering
+
+```{r}
+res <- cocktail_cluster(
+  vegmatrix           = vm,
+  plot_values         = "rel_cover",
+  species_cluster_phi = TRUE
+)
+```
+
+### 11.3. Step 3: Plot the Cocktail dendrogram
+
+```{r}
+cocktail_plot(
+  x              = res,
+  phi_cut        = 0.35,
+  label_clusters = TRUE,
+  cex_species    = 0.7,
+  main           = "Cocktail clustering (dune dataset)"
+)
+```
+
+### 11.4. Step 4: Define candidate clusters (two common options)
+
+**Option A: parent clusters at a \(\phi\) cut**
+
+```{r}
+clusters_parent <- clusters_at_cut(res, 
+                                   phi_cut = 0.35, 
+                                   as_labels = TRUE)
+clusters_parent
+```
+
+**Option B: strong clusters by score**
+
+```{r}
+clusters_strong <- select_clusters(
+  x         = res,
+  min_phi   = 0.20,
+  min_k     = 2L,
+  min_score = 0.30,
+  mode      = "strict",
+  return    = "labels"
+)
+clusters_strong
+```
+
+### 11.5. Step 5: Species lists (cluster species and \(\phi\)-ranked diagnostics)
+
+Cluster-constituting species sets:
+
+```{r}
+diag_sp <- species_in_clusters(res, labels = clusters_parent)
+str(diag_sp)
+```
+
+\(\phi\)-ranked diagnostic species lists (filtered by \(\phi\)):
+
+```{r}
+diag_sp_phi <- species_in_clusters(
+  x                   = res,
+  labels              = clusters_parent,
+  species_cluster_phi = TRUE,
+  min_phi             = 0.20
+)
+diag_sp_phi[[1]]
+```
+
+### 11.6. Step 6: Cluster distances by co-membership \(\phi\)
+
+```{r}
+D <- cluster_phi_dist(res, clusters = clusters_parent)
+hc <- hclust(D, method = "average")
+plot(hc, 
+     main = "Clusters grouped by co-membership phi distance", 
+     cex = 0.8)
+```
+
+### 11.7. Step 7: Assign plots to candidate vegetation units
+
+```{r}
+rel <- assign_releves(
+  x               = res,
+  strategy        = "count",
+  clusters        = clusters_parent,
+  plot_membership = TRUE,
+  min_group_size  = 1L
+)
+
+table(rel)
+```
+
+---
+
+## 12. Reproducibility notes
+
+- All \(\phi\) computations in `cocktail_cluster()` and downstream functions are \(\phi\) coefficients derived from 2×2 contingency tables (e.g. species presence × cluster membership).
+- Deterministic ordering and tie-handling:
+  - Species order is deterministic: species are kept in the original input column order after removing empty species (all-zero after binarization).
+  - Clustering tie-handling is deterministic: when multiple candidate pairs share the same maximum association coefficient \(\phi\) at a step, they are processed in a fixed order defined by the lower-triangular scan order (increasing column, then row).
+  - Relevé (plot) assignment tie-handling is deterministic: in `assign_releves()`, ties are resolved using strategy-specific secondary and, when applicable, tertiary criteria; if a tie remains, the plot is assigned `"+"` (explicit tie label).

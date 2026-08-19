@@ -69,6 +69,7 @@ data/**/*.xlsx
 data/**/*.xls
 
 # Keep documentation files in data folders
+!data/README_data.md
 !data/raw/README.md
 !data/processed/README.md
 

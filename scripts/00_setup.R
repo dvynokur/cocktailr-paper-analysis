@@ -13,15 +13,10 @@ library(scales)
 
 library(cocktailr)
 
-paper_functions <- here::here("R", "paper_functions.R")
-
-if (file.exists(paper_functions)) {
-  source(paper_functions)
-}
-
 # Create output folders
 dir.create(here::here("outputs", "figures"), recursive = TRUE, showWarnings = FALSE)
 dir.create(here::here("outputs", "tables"), recursive = TRUE, showWarnings = FALSE)
+dir.create(here::here("outputs", "appendix"), recursive = TRUE, showWarnings = FALSE)
 
 # Create local data folders, ignored by Git
 dir.create(here::here("data", "processed"), recursive = TRUE, showWarnings = FALSE)

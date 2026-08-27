@@ -7,7 +7,6 @@ source(here::here("scripts", "01_load_data.R"))
 
 set.seed(14)
 
-
 # 1. Benchmark settings ---------------------------------------------------
 
 subset_sizes <- c(500, 1000, 2500, 5000, 10000, 15000, 20000, nrow(veg))
@@ -126,7 +125,6 @@ readr::write_csv(
   benchmark_results,
   here::here("outputs", "tables", "benchmark_subsets_runtime.csv")
 )
-
 
 # 5. Summarise results ----------------------------------------------------
 

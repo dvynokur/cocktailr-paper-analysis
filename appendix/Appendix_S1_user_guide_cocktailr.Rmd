@@ -4,17 +4,18 @@ output:
     toc: false
     number_sections: false
     latex_engine: xelatex
-fontsize: 11pt
+    dev: png
+fontsize: 12pt
 geometry: margin=2.5cm
 mainfont: "Times New Roman"
 sansfont: "Arial"
 monofont: "Courier New"
-bibliography: references.bib
-csl: journal-of-vegetation-science.csl
+bibliography: ../references.bib
+csl: ../journal-of-vegetation-science.csl
 link-citations: true
 ---
 
-```{r setup, include=FALSE}
+```{r setup, include=FALSE, dev='png', fig.keep='none'}
 knitr::opts_chunk$set(
   collapse   = TRUE,
   comment    = "#>",
@@ -22,6 +23,8 @@ knitr::opts_chunk$set(
   fig.height = 5,
   dpi        = 300,
   out.width  = "100%",
+  dev        = "png",
+  fig.path   = "../outputs/appendix/figures/",
   echo       = TRUE,
   message    = FALSE,
   warning    = FALSE,
@@ -51,7 +54,7 @@ library(cocktailr)
 
 This appendix describes the main workflow and functions of the **`cocktailr`** package, which implements a fast and reproducible version of the Cocktail algorithm for clustering vegetation-plot data.
 
-The workflow described in this appendix follows the same structure as the main paper:
+The typical workflow is:
 
 1. Prepare vegetation data either as a **plots × species** matrix or as a **long-format vegetation table** with plot, species and value columns.
 
@@ -220,7 +223,7 @@ cocktail_cluster(
 
 ### 2.3. Returned components
 
-The result `res` is a list of class `"cocktail"` with at least:
+The result `res` is a list of class `"cocktail"` with:
 
 - `Cluster.species`: clusters × species matrix (0/1 membership of species in each cluster).
 - `Cluster.info`: clusters × 2 integer matrix with columns `k` (number of species constituting the cluster) and `m` (cluster membership threshold).
@@ -313,7 +316,7 @@ cocktail_plot(
 
 Plot to the current device with a background band at a chosen \(\phi\) cut:
 
-```{r}
+```{r toy-cocktail-plot}
 cocktail_plot(
   x              = res,
   file           = NULL,
@@ -458,6 +461,7 @@ strong_table_h_logk
 ```
 
 ---
+
 ## 6. Relationships among selected groups: `cluster_dist()`
 
 ### 6.1. Purpose
@@ -577,9 +581,9 @@ cluster_dist(
 )
 ```
 
-Cluster the selected groups:
+Cluster the selected groups. In this small toy example, only two clusters are selected. Therefore, the pairwise containment table is shown, but no dendrogram is plotted. In larger datasets with three or more selected clusters, the distance object can be passed to hclust().
 
-```{r}
+```{r, eval=FALSE}
 hc_clusters <- hclust(D, method = "average")
 
 plot(
@@ -600,6 +604,7 @@ D_phi <- cluster_dist(
 ```
 
 ---
+
 ## 7. Species sets and diagnostic lists: `species_in_clusters()`
 
 ### 7.1. Purpose
@@ -880,7 +885,7 @@ res <- cocktail_cluster(
 
 ### 11.3. Step 3: Plot the Cocktail dendrogram
 
-```{r}
+```{r dune-cocktail-plot}
 cocktail_plot(
   x              = res,
   phi_cut        = 0.35,
@@ -945,7 +950,7 @@ diag_sp_phi[[1]]
 
 ### 11.6. Step 6: Relationships among selected clusters
 
-```{r}
+```{r dune-containment-dendrogram}
 D <- cluster_dist(
   res,
   clusters = clusters_strong,
@@ -976,6 +981,7 @@ table(rel)
 ```
 
 ---
+
 ## 12. Reproducibility notes
 
 - All \(\phi\) computations in `cocktail_cluster()` and downstream functions are \(\phi\) coefficients derived from 2×2 contingency tables (e.g. species presence × cluster membership).

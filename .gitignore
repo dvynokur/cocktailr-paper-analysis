@@ -1,60 +1,21 @@
-# History files
+# R session / user files
 .Rhistory
-.Rapp.history
-
-# Session Data files
 .RData
 .RDataTmp
-
-# User-specific files
 .Ruserdata
-
-# Example code in package build process
-*-Ex.R
-
-# Output files from R CMD build
-/*.tar.gz
-
-# Output files from R CMD check
-/*.Rcheck/
-
-# RStudio files
+.Renviron
 .Rproj.user/
+.vscode/
 
-# produced vignettes
-vignettes/*.html
-vignettes/*.pdf
-
-# OAuth2 token, see https://github.com/hadley/httr/releases/tag/v0.3
-.httr-oauth
-
-# knitr and R markdown default cache directories
+# R Markdown / knitr temporary files
 *_cache/
-/cache/
-
-# Temporary files created by R markdown
+cache/
 *.utf8.md
 *.knit.md
 
-# R Environment Variables
-.Renviron
-
-# pkgdown site
-docs/
-
-# translation temp files
-po/*~
-
-# RStudio Connect folder
-rsconnect/
-
-# ---- Project-specific
-
-# Raw/private data
+# Local/private data
 data/raw/
 data/private/
-
-# Processed data generated locally
 data/processed/
 
 # Large local data objects
@@ -62,7 +23,7 @@ data/processed/
 *.RDS
 *.RData
 
-# Raw tabular data inside data/
+# Tabular data in data folders
 data/**/*.csv
 data/**/*.tsv
 data/**/*.xlsx

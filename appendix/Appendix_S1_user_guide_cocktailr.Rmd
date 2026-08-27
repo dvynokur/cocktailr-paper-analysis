@@ -51,16 +51,21 @@ library(cocktailr)
 
 This appendix describes the main workflow and functions of the **`cocktailr`** package, which implements a fast and reproducible version of the Cocktail algorithm for clustering vegetation-plot data.
 
-The typical workflow is:
+The workflow described in this appendix follows the same structure as the main paper:
 
-1. Prepare vegetation data either as a **plots × species** matrix or as a long-format table with plot, species and value columns.
-2. Run **`cocktail_cluster()`** to build the Cocktail tree (and optionally compute **species–cluster \(\phi\) profiles**).
-3. Use **`cocktail_plot()`** to visualize the dendrogram.
-4. Extract candidate diagnostic species groups (either **parent clusters at a \(\phi\) cut** with **`clusters_at_cut()`** or **strong clusters by score** with **`select_clusters()`**).
-5. Inspect species sets with **`species_in_clusters()`** (optionally ranked/filtered by \(\phi\)).
-6. List plots belonging to clusters or combinations of clusters with **`releves_in_clusters()`** and locate clusters containing target species with **`clusters_with_species()`**.
-7. Quantify distances between clusters by **direct plot co-membership \(\phi\)** with **`cluster_phi_dist()`**.
-8. Assign plots (relevés) to candidate vegetation units with **`assign_releves()`**.
+1. Prepare vegetation data either as a **plots × species** matrix or as a **long-format vegetation table** with plot, species and value columns.
+
+2. Run **`cocktail_cluster()`** to build the Cocktail species-group hierarchy and, if needed, compute **species–cluster \(\phi\) profiles**.
+
+3. Visualize and inspect the Cocktail hierarchy with **`cocktail_plot()`** and extract broader parent clusters at a chosen \(\phi\) cut with **`clusters_at_cut()`**.
+
+4. Select candidate diagnostic species groups with **`select_clusters()`**, using filtering criteria, alternative score methods and non-nesting rules.
+
+5. Explore relationships among selected Cocktail groups with **`cluster_dist()`**, using either plot-membership containment or direct co-membership \(\phi\).
+
+6. Inspect the selected groups with helper functions: use **`species_in_clusters()`** to list constituting or \(\phi\)-ranked diagnostic species, **`releves_in_clusters()`** to list plots satisfying cluster membership rules, and **`clusters_with_species()`** to find clusters containing target species.
+
+7. Assign plots (relevés) to candidate vegetation units with **`assign_releves()`**, using count-, cover-, \(\phi\)- or cover-weighted \(\phi\)-based assignment strategies.
 
 Below we describe each function in detail with reproducible examples.
 
@@ -77,10 +82,10 @@ install.packages("remotes")
 remotes::install_github("dvynokur/cocktailr")
 ```
 
-The version of `cocktailr` used in the manuscript was archived as GitHub release v0.1.0 and can be installed using:
+The version of `cocktailr` used in the manuscript was archived as GitHub release v0.1.1 and can be installed using:
 
 ```{r, eval=FALSE}
-remotes::install_github("dvynokur/cocktailr@v0.1.0")
+remotes::install_github("dvynokur/cocktailr@v0.1.1")
 ```
 
 After installation, load the package with:
@@ -364,47 +369,55 @@ parent_labels
 
 ---
 
-## 5. Selecting strong clusters by score: `select_clusters()`
+## 5. Selecting diagnostic species groups: `select_clusters()`
 
 ### 5.1. Purpose
 
-`select_clusters()` ranks clusters using a combined score based on merge \(\phi\), cluster size \(k\), and membership threshold \(m\):
+`select_clusters()` filters and ranks Cocktail clusters and returns either cluster labels, numeric cluster IDs, or a table of selected clusters and their statistics.
+
+By default, clusters are ranked using the operational score
 
 \[
-\mathrm{score} = h \cdot \log(k) \cdot \log(m),
+\mathrm{score}_c = h_c \cdot \log(k_c) \cdot \log(m_c),
 \]
 
-where \(h\) is the merge height (\(\phi\)), \(k\) is the number of species in the cluster, and \(m\) is the cluster membership threshold.
+where \(h_c\) is the merge height of cluster \(c\), \(k_c\) is the number of species in the cluster, and \(m_c\) is the Cocktail membership threshold. This score is intended as a practical ranking criterion, not as a universal measure of diagnostic quality.
 
-Selection is greedy in decreasing score order (ties are broken by larger \(k\), then smaller cluster ID). The `mode` argument controls nesting:
+Alternative score methods are available. With `score_method = "h_logk"`, clusters are ranked by \(h \cdot \log(k)\), so the membership threshold \(m\) does not affect ranking. With `score_method = "h"`, clusters are ranked only by merge height.
 
-- `mode = "strict"`: returns a non-nested set (a candidate is skipped if it is a strict ancestor or descendant of any already selected cluster).
-- `mode = "top"`: among eligible candidates, keeps only the hierarchically highest clusters (drops descendants if an eligible ancestor exists).
+Candidate clusters can be filtered by merge height (`min_phi`), species-group size (`min_k`), number of member plots (`min_n`) and selection score (`min_score`). Selection can also be restricted to clusters contained within a broader cluster using `within_cluster`.
+
+Because the Cocktail hierarchy contains nested groups, the `mode` argument controls how nested candidates are handled. With `mode = "strict"`, a selected cluster excludes both its ancestors and its descendants from further selection. With `mode = "top"`, only the hierarchically highest eligible clusters are retained.
 
 ### 5.2. Usage
 
 ```{r, eval=FALSE}
 select_clusters(
   x,
-  clusters   = NULL,
-  min_phi    = 0.2,
-  min_k      = 1L,
-  min_score  = 1,
-  mode       = c("strict","top"),
-  return     = c("labels","ids","table")
+  clusters = NULL,
+  within_cluster = NULL,
+  min_phi = 0.2,
+  min_k = 1L,
+  min_n = 1L,
+  min_score = 0,
+  score_method = c("h_logk_logm", "h_logk", "h"),
+  mode = c("strict", "top"),
+  return = c("labels", "ids", "table")
 )
 ```
 
-### 5.3. Example
+### 5.3. Examples
 
 ```{r}
 strong_labels <- select_clusters(
-  x         = res,
-  min_phi   = 0.20,
-  min_k     = 1L,
+  x = res,
+  min_phi = 0.20,
+  min_k = 1L,
+  min_n = 1L,
   min_score = 0,
-  mode      = "strict",
-  return    = "labels"
+  score_method = "h_logk_logm",
+  mode = "strict",
+  return = "labels"
 )
 
 strong_labels
@@ -414,29 +427,189 @@ Score table:
 
 ```{r}
 strong_table <- select_clusters(
-  x         = res,
-  min_phi   = 0.20,
-  min_k     = 1L,
+  x = res,
+  min_phi = 0.20,
+  min_k = 1L,
+  min_n = 1L,
   min_score = 0,
-  mode      = "strict",
-  return    = "table"
+  score_method = "h_logk_logm",
+  mode = "strict",
+  return = "table"
 )
 
 strong_table
 ```
 
----
+Optional example without the membership threshold in the ranking score:
 
-## 6. Species sets and diagnostic lists: `species_in_clusters()`
+```{r, eval=FALSE}
+strong_table_h_logk <- select_clusters(
+  x = res,
+  min_phi = 0.20,
+  min_k = 1L,
+  min_n = 1L,
+  min_score = 0,
+  score_method = "h_logk",
+  mode = "strict",
+  return = "table"
+)
+
+strong_table_h_logk
+```
+
+---
+## 6. Relationships among selected groups: `cluster_dist()`
 
 ### 6.1. Purpose
+
+`cluster_dist()` computes pairwise distances between Cocktail clusters based on binary plot-membership vectors derived from `Plot.cluster`.
+
+Membership is derived as:
+
+`membership = (Plot.cluster > 0)`.
+
+This works for both `plot_values = "binary"` and `plot_values = "rel_cover"`, because in both cases positive values indicate plots satisfying the Cocktail membership rule of a cluster.
+
+In principle, distances can be computed among all Cocktail clusters by setting `clusters = NULL`. In large datasets, however, this often produces a very large and difficult-to-interpret distance matrix. A more common workflow is to first select a manageable set of candidate diagnostic groups with `select_clusters()` and then examine relationships among these selected groups.
+
+Two distance methods are available:
+
+- `method = "containment"`: distance is based on plot-membership containment and is calculated as \(1 - \max(C_{A|B}, C_{B|A})\). This is the default and is useful for detecting nested or partly nested relationships among Cocktail groups.
+
+- `method = "phi"`: distance is calculated as \(1 - \phi\), where \(\phi\) is the phi coefficient between binary plot-membership vectors. This corresponds to symmetric direct co-membership association.
+
+### 6.2. Containment distance
+
+For two clusters \(A\) and \(B\), let \(n_A\) and \(n_B\) be the numbers of plots satisfying their membership rules, and let \(n_{AB}\) be the number of plots satisfying both rules.
+
+Directional containment is calculated as:
+
+\[
+C_{A|B} = \frac{n_{AB}}{n_A}, \qquad
+C_{B|A} = \frac{n_{AB}}{n_B}.
+\]
+
+The similarity is the larger of the two directional containment values:
+
+\[
+\mathrm{sim}(A,B) = \max(C_{A|B}, C_{B|A}),
+\]
+
+and the distance is:
+
+\[
+d(A,B) = 1 - \mathrm{sim}(A,B).
+\]
+
+Containment distance ranges from 0 to 1.
+
+### 6.3. Phi distance
+
+For `method = "phi"`, the phi coefficient is computed from the 2 × 2 table of plot co-membership:
+
+- \(a\): plots where \(A=1\) and \(B=1\),
+- \(b\): plots where \(A=1\) and \(B=0\),
+- \(c\): plots where \(A=0\) and \(B=1\),
+- \(d\): plots where \(A=0\) and \(B=0\).
+
+\[
+\phi = \frac{ad - bc}{\sqrt{(a+c)(b+d)(a+b)(c+d)}}.
+\]
+
+Distance is then:
+
+\[
+d(A,B) = 1 - \phi(A,B).
+\]
+
+Since \(\phi\) can be negative, phi distances can range from 0 to 2.
+
+### 6.4. Usage
+
+```{r, eval=FALSE}
+cluster_dist(
+  x,
+  clusters = NULL,
+  method = c("containment", "phi"),
+  return = c("dist", "matrix", "table")
+)
+```
+
+### 6.5. Example
+
+Select clusters first:
+
+```{r}
+clusters_for_dist <- select_clusters(
+  x = res,
+  min_phi = 0.20,
+  min_k = 1L,
+  min_n = 1L,
+  min_score = 0,
+  score_method = "h_logk_logm",
+  mode = "strict",
+  return = "labels"
+)
+
+clusters_for_dist
+```
+
+Compute containment distance among selected clusters:
+
+```{r}
+D <- cluster_dist(
+  x = res,
+  clusters = clusters_for_dist,
+  method = "containment"
+)
+
+D
+```
+
+Inspect the pairwise relationship table:
+
+```{r}
+cluster_dist(
+  x = res,
+  clusters = clusters_for_dist,
+  method = "containment",
+  return = "table"
+)
+```
+
+Cluster the selected groups:
+
+```{r}
+hc_clusters <- hclust(D, method = "average")
+
+plot(
+  hc_clusters,
+  main = "Cluster dendrogram (containment distance)",
+  cex = 0.8
+)
+```
+
+For direct co-membership phi distance, use:
+
+```{r, eval=FALSE}
+D_phi <- cluster_dist(
+  x = res,
+  clusters = clusters_for_dist,
+  method = "phi"
+)
+```
+
+---
+## 7. Species sets and diagnostic lists: `species_in_clusters()`
+
+### 7.1. Purpose
 
 `species_in_clusters()` returns species sets for selected Cocktail clusters or for combinations of clusters.
 
 - By default, it returns the **cluster-constituting species set** (from `Cluster.species`).
 - If `species_cluster_phi = TRUE`, it uses `Species.cluster.phi` to report \(\phi\) values per species and cluster, allowing ranked and \(\phi\)-filtered diagnostic lists.
 
-### 6.2. Usage
+### 7.2. Usage
 
 ```{r, eval=FALSE}
 species_in_clusters(
@@ -449,7 +622,7 @@ species_in_clusters(
 )
 ```
 
-### 6.3. Examples
+### 7.3. Examples
 
 Cluster-constituting species sets:
 
@@ -489,9 +662,9 @@ sp_phi$c_5
 
 ---
 
-## 7. Listing plots in clusters or combinations of clusters: `releves_in_clusters()`
+## 8. Listing plots in clusters or combinations of clusters: `releves_in_clusters()`
 
-### 7.1. Purpose
+### 8.1. Purpose
 
 `releves_in_clusters()` returns the plot IDs (relevés) belonging to selected clusters based on `Plot.cluster > 0`. It supports both single clusters and combinations of clusters (OR across clusters).
 
@@ -502,7 +675,7 @@ If `values = TRUE`, it returns membership values instead of plot IDs:
 
 If `drop0 = TRUE` (default), only plots belonging to the selected cluster(s) are returned. If `drop0 = FALSE`, non-member plots are also retained with membership value 0. This option is mainly useful when returning membership values rather than only plot IDs.
 
-### 7.2. Usage
+### 8.2. Usage
 
 ```{r, eval=FALSE}
 releves_in_clusters(
@@ -514,7 +687,7 @@ releves_in_clusters(
 )
 ```
 
-### 7.3. Examples
+### 8.3. Examples
 
 Single cluster:
 
@@ -545,15 +718,15 @@ releves_in_clusters(
 
 ---
 
-## 8. Finding clusters containing species: `clusters_with_species()`
+## 9. Finding clusters containing species: `clusters_with_species()`
 
-### 8.1. Purpose
+### 9.1. Purpose
 
 `clusters_with_species()` returns clusters whose cluster-constituting species set (from `Cluster.species`) contains one or more queried species. This is a fast, topological lookup (not a \(\phi\)-based fidelity measure).
 
 By default, it filters to clusters with `Cluster.height >= 0` via `min_phi = 0`.
 
-### 8.2. Usage
+### 9.2. Usage
 
 ```{r, eval=FALSE}
 clusters_with_species(
@@ -565,7 +738,7 @@ clusters_with_species(
 )
 ```
 
-### 8.3. Examples
+### 9.3. Examples
 
 Clusters containing a species:
 
@@ -581,62 +754,6 @@ clusters_with_species(
   species = c("sp5", "sp8"),
   match   = "all",
   min_phi = 0.2
-)
-```
-
----
-
-## 9. Distances between clusters: `cluster_phi_dist()`
-
-### 9.1. Purpose
-
-`cluster_phi_dist()` computes pairwise distances between clusters based on plot co-membership, using the **\(\phi\) coefficient between their binary plot-membership vectors** (co-membership across plots).
-
-Membership is derived as:  
-`membership = (Plot.cluster > 0)`.
-
-Distance is defined as:
-
-\[
-d(A,B) = 1 - \phi(A,B),
-\]
-
-so distances lie in \([0,2]\).
-
-This function does **not** use `Species.cluster.phi`.
-
-### 9.2. Usage
-
-```{r, eval=FALSE}
-cluster_phi_dist(
-  x,
-  clusters = NULL
-)
-```
-
-### 9.3. Example
-
-Select clusters with sufficiently high merge height (\(\phi\)):
-
-```{r}
-clusters_for_dist <- which(res$Cluster.height >= 0.25)
-clusters_for_dist
-
-D <- cluster_phi_dist(
-  x        = res,
-  clusters = clusters_for_dist
-)
-
-D
-```
-
-Cluster the selected clusters:
-
-```{r}
-hc_clusters <- hclust(D, method = "average")
-plot(hc_clusters, 
-     main = "Cluster dendrogram (1 - co-membership phi)", 
-     cex = 0.8
 )
 ```
 
@@ -773,78 +890,92 @@ cocktail_plot(
 )
 ```
 
-### 11.4. Step 4: Define candidate clusters (two common options)
+### 11.4. Step 4: Define candidate clusters
 
-**Option A: parent clusters at a \(\phi\) cut**
+Parent clusters at a \(\phi\) cut can be extracted with `clusters_at_cut()`:
 
 ```{r}
-clusters_parent <- clusters_at_cut(res, 
-                                   phi_cut = 0.35, 
-                                   as_labels = TRUE)
+clusters_parent <- clusters_at_cut(
+  res,
+  phi_cut = 0.35,
+  as_labels = TRUE
+)
+
 clusters_parent
 ```
 
-**Option B: strong clusters by score**
+Candidate diagnostic species groups can be selected with `select_clusters()`:
 
 ```{r}
 clusters_strong <- select_clusters(
-  x         = res,
-  min_phi   = 0.20,
-  min_k     = 2L,
-  min_score = 0.30,
-  mode      = "strict",
-  return    = "labels"
+  x = res,
+  min_phi = 0.20,
+  min_k = 2L,
+  min_n = 1L,
+  min_score = 0,
+  score_method = "h_logk_logm",
+  mode = "strict",
+  return = "labels"
 )
+
 clusters_strong
 ```
 
 ### 11.5. Step 5: Species lists (cluster species and \(\phi\)-ranked diagnostics)
 
-Cluster-constituting species sets:
+Cluster-constituting species sets for the selected diagnostic groups:
 
 ```{r}
-diag_sp <- species_in_clusters(res, labels = clusters_parent)
+diag_sp <- species_in_clusters(res, labels = clusters_strong)
 str(diag_sp)
 ```
 
-\(\phi\)-ranked diagnostic species lists (filtered by \(\phi\)):
+\(\phi\)-ranked diagnostic species lists for the selected diagnostic groups:
 
 ```{r}
 diag_sp_phi <- species_in_clusters(
-  x                   = res,
-  labels              = clusters_parent,
+  x = res,
+  labels = clusters_strong,
   species_cluster_phi = TRUE,
-  min_phi             = 0.20
+  min_phi = 0.20
 )
+
 diag_sp_phi[[1]]
 ```
 
-### 11.6. Step 6: Cluster distances by co-membership \(\phi\)
+### 11.6. Step 6: Relationships among selected clusters
 
 ```{r}
-D <- cluster_phi_dist(res, clusters = clusters_parent)
+D <- cluster_dist(
+  res,
+  clusters = clusters_strong,
+  method = "containment"
+)
+
 hc <- hclust(D, method = "average")
-plot(hc, 
-     main = "Clusters grouped by co-membership phi distance", 
-     cex = 0.8)
+
+plot(
+  hc,
+  main = "Clusters grouped by containment distance",
+  cex = 0.8
+)
 ```
 
 ### 11.7. Step 7: Assign plots to candidate vegetation units
 
 ```{r}
 rel <- assign_releves(
-  x               = res,
-  strategy        = "count",
-  clusters        = clusters_parent,
+  x = res,
+  strategy = "count",
+  clusters = clusters_strong,
   plot_membership = TRUE,
-  min_group_size  = 1L
+  min_group_size = 1L
 )
 
 table(rel)
 ```
 
 ---
-
 ## 12. Reproducibility notes
 
 - All \(\phi\) computations in `cocktail_cluster()` and downstream functions are \(\phi\) coefficients derived from 2×2 contingency tables (e.g. species presence × cluster membership).

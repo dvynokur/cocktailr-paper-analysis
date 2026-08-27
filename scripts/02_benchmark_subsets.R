@@ -185,7 +185,7 @@ runtime_plot <- ggplot2::ggplot(
   ) +
   ggplot2::labs(
     x = "Number of plots",
-    y = "Runtime, min"
+    y = "Runtime, minutes"
   ) +
   ggplot2::theme_bw() +
   ggplot2::theme(

@@ -37,7 +37,7 @@ options(width = 60)
 library(cocktailr)
 ```
 
-\noindent Supporting Information to the paper [Authors] Cocktail clustering for diagnostic species-based vegetation classification in large databases. \textit{Journal of Vegetation Science}.
+\noindent Supporting Information to the paper [Authors] Vegetation classification based on diagnostic species groups: an end-to-end Cocktail workflow for large databases. \textit{Journal of Vegetation Science}.
 
 \bigskip
 \bigskip
@@ -52,7 +52,7 @@ library(cocktailr)
 
 \pagebreak
 
-This appendix describes the main workflow and functions of the **`cocktailr`** package, which implements a fast and reproducible version of the Cocktail algorithm for clustering vegetation-plot data.
+This appendix describes the main workflow and functions of the **`cocktailr`** package, which implements a fast and reproducible version of the Cocktail algorithm for clustering vegetation-plot data [@Bruelheide2016Cocktail].
 
 The typical workflow is:
 
@@ -101,15 +101,17 @@ library(cocktailr)
 
 `cocktailr` accepts vegetation data either as a **plots × species** table (**wide format**) or as a **long-format** table with plot, species and value columns.
 
+For brevity, the term “plots” is used throughout this appendix interchangeably with “plot records” and “relevés”.
+
 In the **wide format**, rows are plots (relevés), columns are species, and cell values are typically **cover/abundance**. In the **long format**, each row represents one plot–species record together with its associated value.
 
 Cocktail clustering itself is based on **presence/absence** only: internally, values > 0 are treated as presence (1), and values ≤ 0 or `NA` as absence (0). Cover values therefore do **not** influence the merge topology.
 
-Cover values can still be used downstream if requested:
+Cover values can still be used downstream if requested (in step 7, relevé assignment):
 
 - If `plot_values = "rel_cover"` in `cocktail_cluster()`, the function stores **relative cover** for each plot and cluster in `Plot.cluster`, defined as  
   (sum of the cluster species covers in the plot) / (total cover in the plot),  
-  with values set to 0 for plots that do not meet the cluster membership threshold (*m*) and for plots with total cover = 0.
+  with values set to 0 for plots that do not meet the cluster membership threshold (*m*).
 
 Basic checks on the cover scale are performed inside `cocktail_cluster()`:
 
@@ -120,9 +122,9 @@ Minimum requirements:
 
 **Wide format**
 
-- plots in rows, species in columns
-- `colnames(vegmatrix)` = species names (required)
-- `rownames(vegmatrix)` = plot names (strongly recommended)
+- input should be a matrix or data frame, with plots in rows and species in columns
+- column names must contain species names
+- row names should contain plot names; if row names are absent, plot names are generated internally
 - species columns with no presences (all zeros after binarization) are dropped internally before clustering
 
 **Long format**
@@ -169,7 +171,7 @@ vm_long
 
 `cocktail_cluster()` performs **Cocktail agglomeration** on vegetation data supplied either as a **plots × species** table (wide format) or as a **long-format** table with plot, species and value columns.
 
-For two binary presence vectors representing two species, \(\phi\) is computed from the 2×2 contingency table counts:
+Following the fidelity-based use of the \(\phi\) coefficient in vegetation classification [@Bruelheide2000], \(\phi\) is computed from the 2×2 contingency table counts:
 
 - \(a\): number of plots where both species occur
 - \(b\): plots where species 1 occurs and species 2 does not
@@ -249,7 +251,8 @@ res <- cocktail_cluster(
   vegmatrix           = vm,
   plot_values         = "rel_cover",
   species_cluster_phi = TRUE,
-  save_vegmatrix      = TRUE
+  save_vegmatrix      = TRUE,
+  progress            = FALSE
 )
 
 names(res)
@@ -265,7 +268,8 @@ res_long <- cocktail_cluster(
   input_format        = "long",
   long                = list(plot = "plot",
                              species = "species",
-                             value = "value")
+                             value = "value"),
+  progress            = FALSE
 )
 
 class(res_long$Plot.cluster)
@@ -328,7 +332,7 @@ cocktail_plot(
 
 Highlight selected clusters (vector) or combinations of clusters (list):
 
-```{r, eval=FALSE}
+```{r}
 # selected clusters as a vector
 cocktail_plot(x = res,
               clusters = c("c_2","c_5"),
@@ -445,7 +449,7 @@ strong_table
 
 Optional example without the membership threshold in the ranking score:
 
-```{r, eval=FALSE}
+```{r}
 strong_table_h_logk <- select_clusters(
   x = res,
   min_phi = 0.20,
@@ -499,7 +503,15 @@ The similarity is the larger of the two directional containment values:
 \mathrm{sim}(A,B) = \max(C_{A|B}, C_{B|A}),
 \]
 
-and the distance is:
+which is equivalent to
+
+\[
+\mathrm{sim}(A,B) = \frac{n_{AB}}{\min(n_A,n_B)}.
+\]
+
+Thus, containment similarity is mathematically equivalent to Simpson similarity [@Simpson1960] applied to binary plot-membership sets, with shared member plots replacing shared taxa. We use the term containment here because, in the context of Cocktail groups, the index is interpreted as the degree to which the plot-membership set of one group is contained within that of another.
+
+The distance is then:
 
 \[
 d(A,B) = 1 - \mathrm{sim}(A,B).
@@ -582,16 +594,6 @@ cluster_dist(
 ```
 
 Cluster the selected groups. In this small toy example, only two clusters are selected. Therefore, the pairwise containment table is shown, but no dendrogram is plotted. In larger datasets with three or more selected clusters, the distance object can be passed to hclust().
-
-```{r, eval=FALSE}
-hc_clusters <- hclust(D, method = "average")
-
-plot(
-  hc_clusters,
-  main = "Cluster dendrogram (containment distance)",
-  cex = 0.8
-)
-```
 
 For direct co-membership phi distance, use:
 
@@ -777,6 +779,8 @@ Candidate vegetation units are defined by `clusters`:
 
 Each plot is assigned by scoring all candidate vegetation units and selecting the best-scoring unit. Depending on `plot_membership`, scoring can be restricted to vegetation units for which the plot is already a Cocktail member (based on `Plot.cluster > 0`, combined across the clusters representing that unit), or allowed for all candidate vegetation units.
 
+In the formulas below, \(\mathrm{cover}(p,i)\) denotes the internally stored cover value used for assignment. When relative-cover output was requested, this is cover rescaled within plot \(p\), not the original field cover estimate.
+
 ### 10.2. Interface
 
 ```{r, eval=FALSE}
@@ -817,7 +821,7 @@ For each candidate vegetation unit \(u\), `assign_releves()` defines a set of ca
 
 **`"phi_cover"`** (requires `Species.cluster.phi`)
 
-- Score: \(\sum \mathrm{cover}(p,i) \times \phi(i,u)\) over species in \(S_u\) present in the plot.
+- Score: \(\sum \mathrm{cover}(p,i) \times \phi(i,u)\) over species in \(S_u\) present in the plot, where \(\mathrm{cover}(p,i)\) refers to the internally stored relative cover used for assignment, not the original cover estimate.
 - Tie-breakers: (1) total cover, (2) species count; remaining ties set to `"+"`. All zero set to `NA`.
 - Candidate species depend on `min_phi`:
   - `min_phi = NULL` (default): \(S_u\) contains only the cluster-constituting species.
@@ -861,7 +865,7 @@ table(rel_phi)
 
 ## 11. Typical analysis workflow (dune dataset)
 
-This section illustrates a typical workflow using the **dune** dataset included in the `vegan` package. The dataset comprises 20 vegetation plots and cover values for 30 plant species.
+This section illustrates a typical workflow using the **dune** dataset included in the `vegan` package [@oksanen]. The dataset comprises 20 vegetation plots and cover values for 30 plant species.
 
 ### 11.1. Step 1: Prepare vegetation matrix
 
@@ -879,7 +883,8 @@ dim(vm)
 res <- cocktail_cluster(
   vegmatrix           = vm,
   plot_values         = "rel_cover",
-  species_cluster_phi = TRUE
+  species_cluster_phi = TRUE,
+  progress            = FALSE
 )
 ```
 
@@ -984,8 +989,12 @@ table(rel)
 
 ## 12. Reproducibility notes
 
-- All \(\phi\) computations in `cocktail_cluster()` and downstream functions are \(\phi\) coefficients derived from 2×2 contingency tables (e.g. species presence × cluster membership).
-- Deterministic ordering and tie-handling:
-  - Species order is deterministic: species are kept in the original input column order after removing empty species (all-zero after binarization).
-  - Clustering tie-handling is deterministic: when multiple candidate pairs share the same maximum association coefficient \(\phi\) at a step, they are processed in a fixed order defined by the lower-triangular scan order (increasing column, then row).
-  - Relevé (plot) assignment tie-handling is deterministic: in `assign_releves()`, ties are resolved using strategy-specific secondary and, when applicable, tertiary criteria; if a tie remains, the plot is assigned `"+"` (explicit tie label).
+`cocktailr` uses deterministic ordering and tie-handling to ensure reproducible results.
+
+- Species order is kept as in the original input after removing empty species. This does not affect the calculation of \(\phi\) values, but it can affect the outcome when exact ties occur among candidate pairs.
+
+- Clustering tie-handling is deterministic: when multiple candidate pairs share the same maximum association coefficient \(\phi\) at a step, the tied pairs are processed in a fixed lower-triangular scan order based on the current species/cluster order.
+
+- Relevé (plot) assignment tie-handling is deterministic: in `assign_releves()`, ties are resolved using strategy-specific secondary and, when applicable, tertiary criteria; if a tie remains, the plot is assigned `"+"` (explicit tie label).
+
+---

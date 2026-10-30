@@ -4,7 +4,7 @@ This repository contains analysis code and supplementary-material generation scr
 
 **Vegetation classification based on diagnostic species groups: an end-to-end Cocktail workflow for large databases**
 
-The repository is separate from the main `cocktailr` R package repository:  
+The workflow here is implemented in `cocktailr` R package repository:  
 https://github.com/dvynokur/cocktailr
 
 ## Contents

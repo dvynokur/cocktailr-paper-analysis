@@ -1,6 +1,6 @@
 # ============================================================
 # 01_load_data.R
-# Load cleaned South Europe data
+# Load South European data
 # ============================================================
 
 source(here::here("scripts", "00_setup.R"))
@@ -70,3 +70,4 @@ readr::write_csv(
 )
 
 message("Prepared data loaded successfully.")
+
